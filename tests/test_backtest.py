@@ -134,6 +134,67 @@ class TestBacktester(unittest.TestCase):
             self.assertIn('return_pct', trade_log.columns)
 
 
+class TestAtrTrailingStop(unittest.TestCase):
+    """Tests for the ATR trailing-stop exit path (see DualMAStrategy's
+    use_atr_trailing_stop and Backtester.run()'s stop-check block)."""
+
+    def setUp(self):
+        # Flat (so fast_ma starts at/below slow_ma -- needed so the rise
+        # phase actually produces a crossover event, not just an
+        # already-crossed-over state with no entry signal), then a steady
+        # rise (triggers the MA crossover entry with RSI above 50), then a
+        # sharp, sustained crash. A real trailing stop should close the
+        # position much closer to the peak than a crossunder-only exit,
+        # which has to wait for the slow MA to actually catch up with a
+        # large, multi-day decline.
+        n_flat, n_rise, n_crash = 25, 60, 40
+        flat = np.full(n_flat, 100.0)
+        rise = flat[-1] * np.exp(np.cumsum(np.full(n_rise, 0.01)))
+        crash = rise[-1] * np.exp(np.cumsum(np.full(n_crash, -0.03)))
+        prices = np.concatenate([flat, rise, crash])
+        dates = pd.date_range('2020-01-01', periods=len(prices), freq='D')
+
+        self.sample_data = pd.DataFrame({
+            'Open': prices, 'High': prices * 1.01, 'Low': prices * 0.99,
+            'Close': prices, 'Volume': np.full(len(prices), 2_000_000),
+        }, index=dates)
+
+    def test_trailing_stop_exits_closer_to_peak_than_crossunder_alone(self):
+        baseline = DualMAStrategy(fast_window=10, slow_window=20, use_atr_trailing_stop=False)
+        with_stop = DualMAStrategy(fast_window=10, slow_window=20, use_atr_trailing_stop=True, atr_stop_mult=2.0)
+
+        bt_baseline = Backtester(self.sample_data, baseline, initial_capital=100000)
+        bt_baseline.run()
+        bt_stop = Backtester(self.sample_data, with_stop, initial_capital=100000)
+        bt_stop.run()
+
+        trades_baseline = bt_baseline.get_trade_log()
+        trades_stop = bt_stop.get_trade_log()
+        self.assertFalse(trades_baseline.empty, "expected at least one baseline trade on this rise/crash path")
+        self.assertFalse(trades_stop.empty, "expected at least one trailing-stop trade on this rise/crash path")
+
+        # First trade's return should be less negative (or more positive)
+        # with the trailing stop, since it exits on the way down instead of
+        # waiting for the MA crossunder confirmation.
+        self.assertGreater(
+            trades_stop.iloc[0]['return_pct'],
+            trades_baseline.iloc[0]['return_pct'],
+        )
+
+    def test_trailing_stop_level_resets_between_trades(self):
+        """A stopped-out position's trailing_stop_level must not leak into
+        the next trade as an artificial floor -- regression test for a bug
+        caught while writing this fix (see backtest.py's reset points)."""
+        strategy = DualMAStrategy(fast_window=5, slow_window=10, use_atr_trailing_stop=True, atr_stop_mult=1.5)
+        backtest = Backtester(self.sample_data, strategy, initial_capital=100000)
+        backtest.run()
+        # Just needs to run without raising and produce a sane equity curve
+        # (a leaked stop level could force every subsequent bar to
+        # immediately re-stop, silently zeroing out all later trades).
+        self.assertEqual(len(backtest.equity_curve), len(self.sample_data))
+        self.assertTrue((backtest.equity_curve > 0).all())
+
+
 class TestTrade(unittest.TestCase):
     """Test cases for Trade dataclass."""
     

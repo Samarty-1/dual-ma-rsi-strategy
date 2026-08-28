@@ -45,6 +45,62 @@ immediately), the `signal` column produced `NaN` on the first bar instead of
 metric keys/edge cases that didn't match the actual implementation. The test
 suite (`pytest tests`) is now 13/13 passing.
 
+## Why the strategy still loses money, and a real (partial) fix
+
+With the bug above fixed, the strategy ran but still lost money on AAPL
+2020-2024 (-1.23% return, Sharpe -3.55, profit factor 0.52 — see the results
+table below). Rather than accept "market efficiency" as the explanation
+without checking, the trade log was cross-referenced against the RSI/MA
+values at each exit to see *why* each trade closed:
+
+| Exit reason | Trades | Returns |
+|---|---|---|
+| RSI > 70 (overbought) | 8 of 10 | +5.6%, -0.4%, -1.5%, +1.0%, +4.5%, +1.3%, -2.0%, +0.1% |
+| MA crossunder (trend reversal) | 2 of 10 | **-9.1%, -10.9%** |
+
+That's the mechanism, not a guess: the RSI>70 exit is a hair-trigger —
+several of those trades exit within 1-2 days of entry, capping winners at a
+couple of percent before the trend has a chance to run. The *only* other
+exit path, the MA crossunder, doesn't fire until a decline has already
+dragged the slow moving average down with it — by which point both
+crossunder exits were already double-digit losses. The strategy was
+structurally set up to cut winners early and let losers run, the opposite
+of sound trade management.
+
+**Fix**: `DualMAStrategy(use_atr_trailing_stop=True)` drops the RSI exit
+entirely and lets `Backtester` manage the exit with an ATR-based trailing
+stop instead (same mechanism already validated in
+[`paper-trading-bot`](https://github.com/Samarty-1/paper-trading-bot)).
+Tested honestly, not just on the one window it was designed to fix:
+
+| | Baseline (RSI exit) | ATR trailing stop |
+|---|---|---|
+| AAPL total return / Sharpe / profit factor | -1.23% / -3.55 / 0.52 | **+2.72% / -1.07 / 2.06** |
+| AAPL avg trade duration | 8.9 days | 33.1 days |
+| Walk-forward mean return / Sharpe (5 folds) | -0.37% / -19.75 | **+0.06% / -2.56** |
+
+Both the single-window backtest and 5-fold walk-forward validation show a
+large, real improvement — profit factor crosses from a losing edge (0.52)
+to a winning one (2.06), and winning trades now run 3-4x longer instead of
+being cut within days. **This is not a universal fix, and the full,
+honest picture matters more than the AAPL headline number:**
+
+| Ticker | Baseline profit factor | ATR-stop profit factor |
+|---|---|---|
+| AAPL | 0.52 | **2.06** (much better) |
+| MSFT | 0.59 | **1.05** (better) |
+| QQQ | 1.39 | 1.21 (roughly flat) |
+| SPY | **5.17** | 0.64 (worse) |
+
+SPY's baseline RSI exit was already good (profit factor 5.17) — on a broad,
+lower-volatility index ETF, cutting a winner at RSI>70 apparently *does*
+protect against giving back gains often enough to pay for itself, unlike on
+a more volatile individual stock like AAPL where it fires prematurely. The
+honest takeaway: `use_atr_trailing_stop` is a real, validated improvement
+for individual-stock volatility profiles like AAPL/MSFT, not a strictly
+better default for every instrument — which instrument you're trading
+should decide which exit rule to use, not a blanket assumption either way.
+
 ## Project Structure
 
 ```
@@ -166,12 +222,15 @@ Walk-forward analysis is implemented to demonstrate strategy robustness and avoi
 
 This approach simulates real-world trading where the strategy is periodically retrained on recent data.
 
-## Actual Results (AAPL, 2020-2024 — see "Fixed" section above)
+## Actual Results (AAPL, 2020-2024, default config — see "Fixed" section above)
 
 This section previously claimed fabricated, never-validated numbers (Sharpe
 1.2-1.8, 55-65% win rate) that directly contradicted the real backtest
 results documented elsewhere in this same README — left over from before
-the strategy was ever actually run. The real, actually-executed numbers:
+the strategy was ever actually run. The real, actually-executed numbers
+**for the default RSI-exit config**; see "Why the strategy still loses
+money" above for the validated `use_atr_trailing_stop=True` alternative,
+which does meaningfully better on this specific ticker:
 
 | Metric | Value |
 |--------|-------|

@@ -102,12 +102,57 @@ class Backtester:
             position_sizes = self.strategy.get_position_sizes(signals, self.initial_capital)
         else:
             position_sizes = pd.Series(1, index=signals.index)
-        
+
+        # ATR trailing stop (opt-in per-strategy -- see DualMAStrategy's
+        # use_atr_trailing_stop). getattr with defaults so strategies without
+        # this attribute (MeanReversionStrategy, MomentumStrategy) are
+        # unaffected. Checked against Close, same as every other exec price
+        # in this engine -- not the day's Low -- so this stays consistent
+        # with how the rest of the loop already prices fills, at the cost of
+        # being slightly less realistic than an intrabar check would be.
+        use_trailing_stop = getattr(self.strategy, "use_atr_trailing_stop", False)
+        atr_stop_mult = getattr(self.strategy, "atr_stop_mult", 2.0)
+        trailing_stop_level = None
+
         # Iterate through each bar
         for i, (date, row) in enumerate(signals.iterrows()):
             signal = row['signal']
             price = row['Close']
-            
+
+            # Trailing stop check happens before the day's regular signal,
+            # so a stop-out and a same-day re-entry signal can't both fire
+            # off stale position state.
+            if use_trailing_stop and position > 0:
+                candidate_stop = price - row['atr'] * atr_stop_mult
+                trailing_stop_level = (
+                    candidate_stop if trailing_stop_level is None else max(trailing_stop_level, candidate_stop)
+                )
+                if price <= trailing_stop_level:
+                    exec_price = price * (1 - self.slippage)
+                    proceeds = position * exec_price
+                    commission_cost = proceeds * self.commission
+                    net_proceeds = proceeds - commission_cost
+
+                    entry_cost = current_trade.shares * current_trade.entry_price
+                    pnl = net_proceeds - entry_cost
+                    return_pct = (pnl / entry_cost) * 100
+
+                    current_trade.exit_date = date
+                    current_trade.exit_price = exec_price
+                    current_trade.pnl = pnl
+                    current_trade.return_pct = return_pct
+                    current_trade.status = "closed"
+                    self.trades.append(current_trade)
+
+                    capital += net_proceeds
+                    position = 0
+                    shares = 0
+                    current_trade = None
+                    trailing_stop_level = None
+                    signal = 0  # already exited -- don't also process this bar's regular signal below
+
+                    logger.debug(f"STOP: @ ${exec_price:.2f}, P&L: ${pnl:.2f} ({return_pct:.2f}%) on {date}")
+
             # Apply slippage to execution price
             if signal == 1:  # Buy
                 exec_price = price * (1 + self.slippage)
@@ -115,7 +160,7 @@ class Backtester:
                 exec_price = price * (1 - self.slippage)
             else:
                 exec_price = price
-            
+
             # Process buy signal
             if signal == 1 and position == 0:
                 # Calculate shares to buy
@@ -165,7 +210,8 @@ class Backtester:
                 position = 0
                 shares = 0
                 current_trade = None
-                
+                trailing_stop_level = None  # don't let a stale stop leak into the next position
+
                 logger.debug(f"SELL: @ ${exec_price:.2f}, P&L: ${pnl:.2f} ({return_pct:.2f}%) on {date}")
             
             # Calculate current equity (mark-to-market)

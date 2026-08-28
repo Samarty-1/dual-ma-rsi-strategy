@@ -76,6 +76,8 @@ class DualMAStrategy(BaseStrategy):
         rsi_overbought: float = 70,
         rsi_oversold: float = 30,
         position_size: float = 0.1,
+        use_atr_trailing_stop: bool = False,
+        atr_stop_mult: float = 2.0,
     ):
         super().__init__(name="DualMA_Strategy")
         self.fast_window = fast_window
@@ -84,7 +86,27 @@ class DualMAStrategy(BaseStrategy):
         self.rsi_overbought = rsi_overbought
         self.rsi_oversold = rsi_oversold
         self.position_size = position_size
-        
+        # See README "Why the RSI>70 exit is the actual problem": in the
+        # default (False) config, RSI>70 fires the exit, which the trade log
+        # shows cuts winners after a couple of percent (several trades exit
+        # within 1-2 days of entry) while the only other exit path (MA
+        # crossunder) doesn't fire until a decline has already dragged the
+        # slow MA down -- both realized crossunder exits in the default
+        # backtest are -9% to -11% losses. use_atr_trailing_stop=True drops
+        # the RSI exit entirely and lets Backtester manage the exit with a
+        # trailing stop instead, so winners aren't capped early and losers
+        # are cut before they reach double digits.
+        self.use_atr_trailing_stop = use_atr_trailing_stop
+        self.atr_stop_mult = atr_stop_mult
+
+    def _calculate_atr(self, data: pd.DataFrame, period: int = 14) -> pd.Series:
+        high_low = data['High'] - data['Low']
+        high_close = np.abs(data['High'] - data['Close'].shift())
+        low_close = np.abs(data['Low'] - data['Close'].shift())
+        ranges = pd.concat([high_low, high_close, low_close], axis=1)
+        true_range = ranges.max(axis=1)
+        return true_range.rolling(window=period).mean()
+
     def _calculate_rsi(self, prices: pd.Series, period: int = 14) -> pd.Series:
         """
         Calculate Relative Strength Index (RSI).
@@ -121,29 +143,35 @@ class DualMAStrategy(BaseStrategy):
         
         # Calculate RSI
         df['rsi'] = self._calculate_rsi(df['Close'], self.rsi_period)
-        
+
+        # ATR is always computed (get_position_sizes needs it for sizing
+        # regardless of use_atr_trailing_stop) so it's available to the
+        # backtester either way.
+        df['atr'] = self._calculate_atr(df)  # fixed 14-period ATR, matching get_position_sizes below
+
         # Calculate MA crossover
         df['ma_crossover'] = df['fast_ma'] - df['slow_ma']
         df['ma_signal'] = np.where(df['ma_crossover'] > 0, 1, 0)
-        
+
         # Generate entry/exit signals
         # Entry: MA crossover up AND RSI > 50 (momentum confirmation)
-        # Exit: MA crossover down OR RSI > 70 (overbought)
-        
+        # Exit: MA crossover down OR RSI > 70 (overbought) -- unless
+        # use_atr_trailing_stop, in which case Backtester handles the exit
+        # instead (see __init__ for why).
+
         df['signal'] = 0
-        
+
         # Long entry conditions
         long_entry = (
             (df['fast_ma'] > df['slow_ma']) &  # Fast above slow
             (df['fast_ma'].shift(1) <= df['slow_ma'].shift(1)) &  # Crossover happened
             (df['rsi'] > 50)  # Momentum confirmation
         )
-        
+
         # Long exit conditions
-        long_exit = (
-            (df['fast_ma'] < df['slow_ma']) |  # Trend reversal
-            (df['rsi'] > self.rsi_overbought)  # Overbought
-        )
+        long_exit = (df['fast_ma'] < df['slow_ma'])  # Trend reversal
+        if not self.use_atr_trailing_stop:
+            long_exit = long_exit | (df['rsi'] > self.rsi_overbought)  # Overbought
         
         # Generate positions (1 = long, 0 = flat)
         position = 0
@@ -182,16 +210,8 @@ class DualMAStrategy(BaseStrategy):
         for more volatile periods.
         """
         df = data.copy()
-        
-        # Calculate ATR (Average True Range)
-        high_low = df['High'] - df['Low']
-        high_close = np.abs(df['High'] - df['Close'].shift())
-        low_close = np.abs(df['Low'] - df['Close'].shift())
-        
-        ranges = pd.concat([high_low, high_close, low_close], axis=1)
-        true_range = ranges.max(axis=1)
-        atr = true_range.rolling(window=14).mean()
-        
+        atr = self._calculate_atr(df)
+
         # Position size = (Capital * Position%) / (ATR * Multiplier)
         # This gives more shares when volatility is low, fewer when high
         risk_per_trade = capital * self.position_size

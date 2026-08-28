@@ -54,14 +54,56 @@ class TestDualMAStrategy(unittest.TestCase):
         """Test position sizing calculation."""
         strategy = DualMAStrategy(fast_window=10, slow_window=20)
         signals = strategy.generate_signals(self.sample_data)
-        
+
         position_sizes = strategy.get_position_sizes(signals, capital=100000)
-        
+
         # Position sizes should be non-negative
         self.assertTrue((position_sizes >= 0).all())
-        
+
         # Position sizes should be a Series
         self.assertIsInstance(position_sizes, pd.Series)
+
+    def test_atr_column_always_present(self):
+        """atr is needed by Backtester's trailing stop regardless of whether
+        use_atr_trailing_stop is on, so it must always be computed."""
+        strategy = DualMAStrategy(fast_window=10, slow_window=20)
+        signals = strategy.generate_signals(self.sample_data)
+        self.assertIn('atr', signals.columns)
+
+    def test_rsi_overbought_exit_disabled_when_using_atr_trailing_stop(self):
+        """With use_atr_trailing_stop=True, RSI > rsi_overbought must NOT by
+        itself flip an open position to flat -- only an MA crossunder
+        should. This is the fix for the diagnosed problem: RSI>70 was
+        cutting winners within 1-2 days of entry in the real AAPL backtest
+        (see README), well before the trend actually reversed."""
+        strategy_with_rsi_exit = DualMAStrategy(fast_window=10, slow_window=20, use_atr_trailing_stop=False)
+        strategy_without_rsi_exit = DualMAStrategy(fast_window=10, slow_window=20, use_atr_trailing_stop=True)
+
+        signals_a = strategy_with_rsi_exit.generate_signals(self.sample_data)
+        signals_b = strategy_without_rsi_exit.generate_signals(self.sample_data)
+
+        # Any bar where RSI is overbought AND the MA hasn't crossed under yet:
+        # the RSI-exit variant may show position 0 there (RSI alone caused
+        # exit), the trailing-stop variant must never exit from RSI alone.
+        still_uptrend = signals_b['fast_ma'] >= signals_b['slow_ma']
+        overbought = signals_b['rsi'] > strategy_without_rsi_exit.rsi_overbought
+        rsi_only_zone = still_uptrend & overbought
+        if rsi_only_zone.any():
+            # In this zone, a position entered before it must stay open in
+            # the no-RSI-exit variant (still trending, no crossunder).
+            in_position_a = signals_a.loc[rsi_only_zone, 'position']
+            in_position_b = signals_b.loc[rsi_only_zone, 'position']
+            # The trailing-stop variant should never show MORE flat bars
+            # than the RSI-exit variant in this zone (it only exits on
+            # crossunder here, which is a strict subset of RSI-exit's
+            # reasons to be flat).
+            self.assertGreaterEqual(in_position_b.sum(), in_position_a.sum())
+
+    def test_use_atr_trailing_stop_default_is_false(self):
+        """Backward compatibility: existing callers that don't pass this
+        argument must get the original RSI-exit behavior unchanged."""
+        strategy = DualMAStrategy(fast_window=10, slow_window=20)
+        self.assertFalse(strategy.use_atr_trailing_stop)
 
 
 class TestMeanReversionStrategy(unittest.TestCase):
