@@ -1,4 +1,4 @@
-# Quantitative Trading Strategy
+# Dual MA + RSI Strategy
 
 A complete end-to-end momentum trading strategy implementation for educational purposes. This project demonstrates professional quantitative finance techniques including data ingestion, backtesting, walk-forward validation, and performance analysis.
 
@@ -30,7 +30,7 @@ capital` check then silently skipped every buy, with no warning logged, so
 the strategy reported **zero trades** and looked untested rather than broken.
 
 This was originally caught while porting the strategy to R (see
-[`quant-trading-strategy-r`](https://github.com/Samarty-1/quant-trading-strategy-r),
+[`dual-ma-rsi-strategy-r`](https://github.com/Samarty-1/dual-ma-rsi-strategy-r),
 which reproduces the bug faithfully and compares it against a corrected
 variant). It's now fixed here directly: `get_position_sizes()` clips share
 count to `(capital * position_size%) / price`, so sizing never exceeds the
@@ -48,7 +48,7 @@ suite (`pytest tests`) is now 13/13 passing.
 ## Project Structure
 
 ```
-quant-trading-strategy/
+dual-ma-rsi-strategy/
 ├── README.md                 # This file
 ├── requirements.txt          # Python dependencies
 ├── setup.py                 # Package setup
@@ -79,8 +79,8 @@ quant-trading-strategy/
 
 ```bash
 # Clone the repository
-git clone https://github.com/Samarty-1/quant-trading-strategy.git
-cd quant-trading-strategy
+git clone https://github.com/Samarty-1/dual-ma-rsi-strategy.git
+cd dual-ma-rsi-strategy
 
 # Create virtual environment (recommended)
 python -m venv venv
@@ -166,18 +166,25 @@ Walk-forward analysis is implemented to demonstrate strategy robustness and avoi
 
 This approach simulates real-world trading where the strategy is periodically retrained on recent data.
 
-## Example Results
+## Actual Results (AAPL, 2020-2024 — see "Fixed" section above)
 
-Based on backtesting on S&P 500 stocks (2020-2024):
+This section previously claimed fabricated, never-validated numbers (Sharpe
+1.2-1.8, 55-65% win rate) that directly contradicted the real backtest
+results documented elsewhere in this same README — left over from before
+the strategy was ever actually run. The real, actually-executed numbers:
 
 | Metric | Value |
 |--------|-------|
-| Annualized Return | ~15-25% |
-| Sharpe Ratio | ~1.2-1.8 |
-| Max Drawdown | ~15-25% |
-| Win Rate | ~55-65% |
+| Total Return | -1.23% |
+| Sharpe Ratio | -3.55 |
+| Win Rate | 50.0% |
+| Profit Factor | 0.52 |
+| Trades | 10 |
 
-*Note: Past performance does not guarantee future results. This is for educational purposes only.*
+*Past performance does not guarantee future results. This is for
+educational purposes only — and, honestly, this specific parameter set
+loses money on this specific window. See `notebooks/strategy_analysis.ipynb`
+for the full run.*
 
 ## Testing
 
