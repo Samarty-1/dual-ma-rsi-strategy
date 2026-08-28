@@ -20,6 +20,31 @@ This project implements a **Dual Moving Average Crossover with RSI Filter** stra
 - **Walk-Forward Validation**: Time-series cross-validation to demonstrate robustness
 - **Interactive Analysis**: Jupyter notebook with visualizations
 
+## Fixed: silent zero-trade bug in ATR position sizing
+
+`DualMAStrategy.get_position_sizes()` computed share counts purely from ATR
+(`risk_per_trade / (ATR * 2)`) with no cap tying the result back to available
+capital. At AAPL's 2020-2024 price level, that formula sized positions worth
+$95k-$975k against a $100k account — the backtester's `if total_cost <=
+capital` check then silently skipped every buy, with no warning logged, so
+the strategy reported **zero trades** and looked untested rather than broken.
+
+This was originally caught while porting the strategy to R (see
+[`quant-trading-strategy-r`](https://github.com/Samarty-1/quant-trading-strategy-r),
+which reproduces the bug faithfully and compares it against a corrected
+variant). It's now fixed here directly: `get_position_sizes()` clips share
+count to `(capital * position_size%) / price`, so sizing never exceeds the
+capital actually allocated to the trade. With the fix, the strategy now
+executes 10 trades over the 2020-2024 AAPL window (previously 0) — see
+`notebooks/strategy_analysis.ipynb` for the full, actually-executed run.
+
+Also fixed while validating this: `requirements.txt` was missing
+`scikit-learn` despite `walk_forward.py` importing it (fresh installs broke
+immediately), the `signal` column produced `NaN` on the first bar instead of
+`0` (invalid for a -1/0/1 signal), and three test assertions referenced
+metric keys/edge cases that didn't match the actual implementation. The test
+suite (`pytest tests`) is now 13/13 passing.
+
 ## Project Structure
 
 ```
@@ -54,7 +79,7 @@ quant-trading-strategy/
 
 ```bash
 # Clone the repository
-git clone https://github.com/YOUR_USERNAME/quant-trading-strategy.git
+git clone https://github.com/Samarty-1/quant-trading-strategy.git
 cd quant-trading-strategy
 
 # Create virtual environment (recommended)

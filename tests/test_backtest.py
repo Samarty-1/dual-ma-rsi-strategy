@@ -69,7 +69,7 @@ class TestBacktester(unittest.TestCase):
         metrics = results['metrics']
         self.assertIn('total_return', metrics)
         self.assertIn('sharpe_ratio', metrics)
-        self.assertIn('max_drawdown', metrics)
+        self.assertIn('max_drawdown_pct', metrics)
     
     def test_trade_recording(self):
         """Test that trades are properly recorded."""
@@ -106,10 +106,10 @@ class TestBacktester(unittest.TestCase):
         # Check key metrics exist and are valid
         self.assertIsInstance(metrics['total_return'], (int, float))
         self.assertIsInstance(metrics['sharpe_ratio'], (int, float))
-        self.assertIsInstance(metrics['max_drawdown'], (int, float))
+        self.assertIsInstance(metrics['max_drawdown_pct'], (int, float))
         
         # Max drawdown should be <= 0
-        self.assertLessEqual(metrics['max_drawdown'], 0)
+        self.assertLessEqual(metrics['max_drawdown_pct'], 0)
         
         # Win rate should be between 0 and 100 if trades exist
         if metrics['num_trades'] > 0:

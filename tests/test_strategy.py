@@ -97,8 +97,10 @@ class TestMeanReversionStrategy(unittest.TestCase):
         self.assertIn('upper_band', signals.columns)
         self.assertIn('lower_band', signals.columns)
         
-        # Upper band should be above lower band
-        self.assertTrue((signals['upper_band'] > signals['lower_band']).all())
+        # Upper band should be above lower band (skip the rolling-window
+        # warmup rows, which are legitimately NaN until `window` bars exist)
+        valid = signals[['upper_band', 'lower_band']].dropna()
+        self.assertTrue((valid['upper_band'] > valid['lower_band']).all())
 
 
 class TestMomentumStrategy(unittest.TestCase):

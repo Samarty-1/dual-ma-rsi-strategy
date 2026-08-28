@@ -159,7 +159,9 @@ class DualMAStrategy(BaseStrategy):
         df['position'] = positions
         
         # Signal for backtester (1 = buy, -1 = sell, 0 = hold)
-        df['signal'] = df['position'].diff()
+        # .fillna(0): the first row has no prior position to diff against,
+        # which produced NaN (not a valid -1/0/1 signal) instead of "no trade"
+        df['signal'] = df['position'].diff().fillna(0)
         df.loc[df['position'].diff() > 0, 'signal'] = 1
         df.loc[df['position'].diff() < 0, 'signal'] = -1
         
@@ -194,10 +196,18 @@ class DualMAStrategy(BaseStrategy):
         # This gives more shares when volatility is low, fewer when high
         risk_per_trade = capital * self.position_size
         dollar_volatility = atr * 2  # 2x ATR as risk per share
-        
+
         position_sizes = risk_per_trade / dollar_volatility
         position_sizes = position_sizes.fillna(0)
-        
+
+        # Cap at position_size% of capital by notional value. Without this,
+        # ATR-based sizing can size a position larger than the account can
+        # actually afford, which the backtester then silently skips
+        # (total_cost <= capital check) rather than partially filling —
+        # so uncapped sizing was producing zero trades, not larger ones.
+        max_affordable_shares = (capital * self.position_size) / df['Close']
+        position_sizes = position_sizes.clip(upper=max_affordable_shares)
+
         return position_sizes
 
 
